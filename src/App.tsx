@@ -11,7 +11,6 @@ import { RouterProvider, createBrowserRouter } from "react-router-dom";
 import { ToastProvider, ToastViewport } from "./components/ui/Toast";
 import RootLayout from "./layouts/RootLayout";
 import { routes } from "./routes";
-import { AuthProvider } from "./hooks/useAuth";
 import { Suspense } from "react";
 import "./index.css";
 
@@ -66,12 +65,10 @@ function App() {
   return (
     <ApolloProvider client={client}>
       <Suspense fallback={<div>Loading...</div>}>
-        <AuthProvider>
-          <ToastProvider>
-            <RouterProvider router={router} />
-            <ToastViewport />
-          </ToastProvider>
-        </AuthProvider>
+        <ToastProvider>
+          <RouterProvider router={router} />
+          <ToastViewport />
+        </ToastProvider>
       </Suspense>
     </ApolloProvider>
   );
