@@ -1,6 +1,13 @@
 import React, { useState } from "react";
 import { useStore } from "../../hooks/useStore";
 import { useAuth } from "../../hooks/useAuth";
+import { useQuery, useMutation } from "@apollo/client";
+import { GET_STORE_CUSTOMERS } from "../../graphql/queries";
+import {
+  UPDATE_CUSTOMER_STATUS,
+  UPDATE_CUSTOMER_NOTES,
+} from "../../graphql/mutations";
+import { toast } from "../../components/ui/Toast";
 
 interface CustomerOrder {
   _id: string;
@@ -69,7 +76,6 @@ const getMockCustomers = (): Customer[] => {
 const StoreCustomers: React.FC = () => {
   const { user } = useAuth();
   const { store } = useStore(user?.id || "");
-  const [customers] = useState<Customer[]>(getMockCustomers());
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(
     null
   );
@@ -79,6 +85,53 @@ const StoreCustomers: React.FC = () => {
   );
   const [editingNotes, setEditingNotes] = useState(false);
   const [newNote, setNewNote] = useState("");
+
+  // GraphQL Query
+  const { data, loading, error } = useQuery(GET_STORE_CUSTOMERS, {
+    variables: { storeId: store?._id },
+    skip: !store?._id,
+  });
+
+  // GraphQL Mutations
+  const [updateCustomerStatus] = useMutation(UPDATE_CUSTOMER_STATUS, {
+    onCompleted: () => {
+      toast({
+        title: "Success",
+        description: "Customer status updated successfully",
+        variant: "default",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const [updateCustomerNotes] = useMutation(UPDATE_CUSTOMER_NOTES, {
+    onCompleted: () => {
+      setEditingNotes(false);
+      toast({
+        title: "Success",
+        description: "Customer notes updated successfully",
+        variant: "default",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  if (loading) return <div>Loading...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+
+  const customers = data?.storeCustomers || [];
 
   const filteredCustomers = customers.filter((customer) => {
     const matchesSearch =
@@ -91,6 +144,35 @@ const StoreCustomers: React.FC = () => {
       filterStatus === "ALL" || customer.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
+
+  const handleStatusUpdate = async (
+    customerId: string,
+    newStatus: Customer["status"]
+  ) => {
+    try {
+      await updateCustomerStatus({
+        variables: {
+          customerId,
+          status: newStatus,
+        },
+      });
+    } catch (error) {
+      console.error("Failed to update customer status:", error);
+    }
+  };
+
+  const handleNotesUpdate = async (customerId: string, notes: string) => {
+    try {
+      await updateCustomerNotes({
+        variables: {
+          customerId,
+          notes,
+        },
+      });
+    } catch (error) {
+      console.error("Failed to update customer notes:", error);
+    }
+  };
 
   const getStatusColor = (status: Customer["status"]) => {
     const colors = {
@@ -302,8 +384,7 @@ const StoreCustomers: React.FC = () => {
                         </button>
                         <button
                           onClick={() => {
-                            // TODO: Implement notes update
-                            setEditingNotes(false);
+                            handleNotesUpdate(selectedCustomer._id, newNote);
                           }}
                           className="text-sm text-blue-600 hover:text-blue-500"
                         >
@@ -356,8 +437,10 @@ const StoreCustomers: React.FC = () => {
                   <select
                     value={selectedCustomer.status}
                     onChange={(e) => {
-                      // TODO: Implement status update
-                      console.log("Update status:", e.target.value);
+                      handleStatusUpdate(
+                        selectedCustomer._id,
+                        e.target.value as Customer["status"]
+                      );
                     }}
                     className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                   >

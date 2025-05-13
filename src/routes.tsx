@@ -29,11 +29,6 @@ const AdminOrders = lazy(() => import("./pages/admin/Orders"));
 const AdminUsers = lazy(() => import("./pages/admin/Users"));
 const StoreDashboard = lazy(() => import("./pages/store/StoreDashboard"));
 
-interface User {
-  id: string;
-  isStoreOwner: boolean;
-}
-
 const StoreOwnerRoute: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
@@ -61,18 +56,14 @@ const AppRoutes: React.FC = () => {
         path="/store"
         element={
           <StoreOwnerRoute>
-            <StoreManagement />
+            <Outlet />
           </StoreOwnerRoute>
         }
-      />
-      <Route
-        path="/store/products"
-        element={
-          <StoreOwnerRoute>
-            <StoreProducts />
-          </StoreOwnerRoute>
-        }
-      />
+      >
+        <Route index element={<StoreDashboard />} />
+        <Route path="manage" element={<StoreManagement />} />
+        <Route path="products" element={<StoreProducts />} />
+      </Route>
       <Route
         path="/store/orders"
         element={
@@ -164,15 +155,6 @@ export const routes: RouteObject[] = [
           { path: "products", element: <AdminProducts /> },
           { path: "orders", element: <AdminOrders /> },
           { path: "users", element: <AdminUsers /> },
-        ],
-      },
-      {
-        path: "store",
-        element: <StoreOwnerRoute />,
-        children: [
-          { index: true, element: <StoreDashboard /> },
-          { path: "manage", element: <StoreManagement /> },
-          { path: "products", element: <StoreProducts /> },
         ],
       },
     ],

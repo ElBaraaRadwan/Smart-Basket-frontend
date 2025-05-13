@@ -1,183 +1,117 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useStore } from "../../hooks/useStore";
 import { useAuth } from "../../hooks/useAuth";
 import { useWebSocket } from "../../hooks/useWebSocket";
 import { toast } from "../../components/ui/Toast";
-
-interface OrderItem {
-  productId: string;
-  productName: string;
-  quantity: number;
-  price: number;
-  variantName?: string;
-  variantId?: string;
-  imageUrl?: string;
-}
-
-interface Order {
-  _id: string;
-  orderNumber: string;
-  customerId: string;
-  customerName: string;
-  customerEmail: string;
-  items: OrderItem[];
-  total: number;
-  status: "PENDING" | "PROCESSING" | "SHIPPED" | "DELIVERED" | "CANCELLED";
-  shippingAddress: {
-    street: string;
-    city: string;
-    state: string;
-    zipCode: string;
-    country: string;
-  };
-  paymentStatus: "PENDING" | "PAID" | "FAILED";
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-// Mock data - Replace with actual API call
-const getMockOrders = (): Order[] => {
-  return Array.from({ length: 10 }, (_, i) => ({
-    _id: `order-${i + 1}`,
-    orderNumber: `ORD-${Math.floor(Math.random() * 10000)}`,
-    customerId: `customer-${i + 1}`,
-    customerName: `Customer ${i + 1}`,
-    customerEmail: `customer${i + 1}@example.com`,
-    items: Array.from(
-      { length: Math.floor(Math.random() * 3) + 1 },
-      (_, j) => ({
-        productId: `product-${j + 1}`,
-        productName: `Product ${j + 1}`,
-        quantity: Math.floor(Math.random() * 5) + 1,
-        price: Math.floor(Math.random() * 100) + 10,
-        imageUrl: `https://via.placeholder.com/50`,
-      })
-    ),
-    total: Math.floor(Math.random() * 500) + 50,
-    status: ["PENDING", "PROCESSING", "SHIPPED", "DELIVERED"][
-      Math.floor(Math.random() * 4)
-    ] as Order["status"],
-    shippingAddress: {
-      street: "123 Main St",
-      city: "Anytown",
-      state: "ST",
-      zipCode: "12345",
-      country: "USA",
-    },
-    paymentStatus: ["PENDING", "PAID", "FAILED"][
-      Math.floor(Math.random() * 3)
-    ] as Order["paymentStatus"],
-    createdAt: new Date(
-      Date.now() - Math.floor(Math.random() * 30) * 24 * 60 * 60 * 1000
-    ),
-    updatedAt: new Date(),
-  }));
-};
+import { useQuery, useMutation } from "@apollo/client";
+import { GET_STORE_ORDERS } from "../../graphql/queries";
+import { UPDATE_ORDER_STATUS } from "../../graphql/mutations";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
+import {
+  Order,
+  OrderStatus,
+  WebSocketOrderMessage,
+  GetStoreOrdersQuery,
+  UpdateOrderStatusMutation,
+} from "../../types/graphql";
 
 const StoreOrders: React.FC = () => {
   const { user } = useAuth();
   const { store } = useStore(user?.id || "");
-  const [orders, setOrders] = useState<Order[]>(getMockOrders());
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const [filterStatus, setFilterStatus] = useState<Order["status"] | "ALL">(
-    "ALL"
+  const [filterStatus, setFilterStatus] = useState<OrderStatus | "ALL">("ALL");
+
+  // GraphQL Query
+  const { data, loading, error } = useQuery<GetStoreOrdersQuery>(
+    GET_STORE_ORDERS,
+    {
+      variables: { storeId: store?._id },
+      skip: !store?._id,
+    }
+  );
+
+  // GraphQL Mutation
+  const [updateOrderStatus] = useMutation<UpdateOrderStatusMutation>(
+    UPDATE_ORDER_STATUS,
+    {
+      onCompleted: () => {
+        toast({
+          title: "Success",
+          description: "Order status updated successfully",
+          variant: "default",
+        });
+      },
+      onError: (error) => {
+        toast({
+          title: "Error",
+          description: error.message,
+          variant: "destructive",
+        });
+      },
+    }
   );
 
   // WebSocket setup
-  const handleWebSocketMessage = (message: { type: string; payload: any }) => {
-    switch (message.type) {
-      case "NEW_ORDER":
-        const newOrder = message.payload as Order;
-        setOrders((prevOrders) => [newOrder, ...prevOrders]);
-        toast({
-          title: "New Order Received",
-          description: `Order #${newOrder.orderNumber} has been placed.`,
-          variant: "default",
-        });
-        break;
+  const { isConnected } = useWebSocket<WebSocketOrderMessage>(
+    `/store/${store?._id}`,
+    (message) => {
+      switch (message.type) {
+        case "NEW_ORDER":
+          toast({
+            title: "New Order Received",
+            description: `Order #${message.payload.orderNumber} has been placed.`,
+            variant: "default",
+          });
+          break;
 
-      case "ORDER_STATUS_UPDATED":
-        const updatedOrder = message.payload as Order;
-        setOrders((prevOrders) =>
-          prevOrders.map((order) =>
-            order._id === updatedOrder._id ? updatedOrder : order
-          )
-        );
-        if (selectedOrder?._id === updatedOrder._id) {
-          setSelectedOrder(updatedOrder);
-        }
-        toast({
-          title: "Order Status Updated",
-          description: `Order #${updatedOrder.orderNumber} is now ${updatedOrder.status}`,
-          variant: "default",
-        });
-        break;
+        case "ORDER_STATUS_UPDATED":
+          if (selectedOrder?._id === message.payload._id) {
+            setSelectedOrder(message.payload);
+          }
+          toast({
+            title: "Order Status Updated",
+            description: `Order #${message.payload.orderNumber} is now ${message.payload.status}`,
+            variant: "default",
+          });
+          break;
 
-      case "ORDER_PAYMENT_UPDATED":
-        const orderWithUpdatedPayment = message.payload as Order;
-        setOrders((prevOrders) =>
-          prevOrders.map((order) =>
-            order._id === orderWithUpdatedPayment._id
-              ? orderWithUpdatedPayment
-              : order
-          )
-        );
-        if (selectedOrder?._id === orderWithUpdatedPayment._id) {
-          setSelectedOrder(orderWithUpdatedPayment);
-        }
+        case "ORDER_PAYMENT_UPDATED":
+          if (selectedOrder?._id === message.payload._id) {
+            setSelectedOrder(message.payload);
+          }
+          toast({
+            title: "Payment Status Updated",
+            description: `Payment for order #${message.payload.orderNumber} is ${message.payload.paymentStatus}`,
+            variant:
+              message.payload.paymentStatus === "PAID"
+                ? "default"
+                : "destructive",
+          });
+          break;
+      }
+    },
+    {
+      onError: () => {
         toast({
-          title: "Payment Status Updated",
-          description: `Payment for order #${orderWithUpdatedPayment.orderNumber} is ${orderWithUpdatedPayment.paymentStatus}`,
-          variant:
-            orderWithUpdatedPayment.paymentStatus === "PAID"
-              ? "default"
-              : "destructive",
+          title: "Connection Error",
+          description: "Failed to connect to real-time updates",
+          variant: "destructive",
         });
-        break;
+      },
     }
-  };
-
-  const { sendMessage } = useWebSocket(
-    `ws://localhost:3000/ws/store/${store?._id}`,
-    handleWebSocketMessage
   );
 
-  // Function to update order status
-  const handleStatusUpdate = async (
-    orderId: string,
-    newStatus: Order["status"]
-  ) => {
-    try {
-      // Send status update through WebSocket
-      sendMessage({
-        type: "UPDATE_ORDER_STATUS",
-        payload: {
-          orderId,
-          status: newStatus,
-        },
-      });
+  if (loading) return <div>Loading...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+  if (!isConnected) {
+    toast({
+      title: "WebSocket Disconnected",
+      description: "Real-time updates are currently unavailable",
+      variant: "destructive",
+    });
+  }
 
-      // Optimistically update the UI
-      setOrders((prevOrders) =>
-        prevOrders.map((order) =>
-          order._id === orderId ? { ...order, status: newStatus } : order
-        )
-      );
-      if (selectedOrder?._id === orderId) {
-        setSelectedOrder((prev) =>
-          prev ? { ...prev, status: newStatus } : null
-        );
-      }
-    } catch (error) {
-      console.error("Failed to update order status:", error);
-      toast({
-        title: "Error",
-        description: "Failed to update order status",
-        variant: "destructive",
-      });
-    }
-  };
-
+  const orders = data?.storeOrders || [];
   const filteredOrders = orders.filter(
     (order) => filterStatus === "ALL" || order.status === filterStatus
   );
@@ -210,7 +144,7 @@ const StoreOrders: React.FC = () => {
           <select
             value={filterStatus}
             onChange={(e) =>
-              setFilterStatus(e.target.value as Order["status"] | "ALL")
+              setFilterStatus(e.target.value as OrderStatus | "ALL")
             }
             className="rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
           >
@@ -410,10 +344,12 @@ const StoreOrders: React.FC = () => {
                   <select
                     value={selectedOrder.status}
                     onChange={(e) =>
-                      handleStatusUpdate(
-                        selectedOrder._id,
-                        e.target.value as Order["status"]
-                      )
+                      updateOrderStatus({
+                        variables: {
+                          orderId: selectedOrder._id,
+                          status: e.target.value as Order["status"],
+                        },
+                      })
                     }
                     className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                   >
@@ -433,4 +369,10 @@ const StoreOrders: React.FC = () => {
   );
 };
 
-export default StoreOrders;
+export default function StoreOrdersWithErrorBoundary() {
+  return (
+    <ErrorBoundary>
+      <StoreOrders />
+    </ErrorBoundary>
+  );
+}
