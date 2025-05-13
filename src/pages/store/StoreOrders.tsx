@@ -1,6 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useStore } from "../../hooks/useStore";
 import { useAuth } from "../../hooks/useAuth";
+import { useWebSocket } from "../../hooks/useWebSocket";
+import { toast } from "../../components/ui/Toast";
 
 interface OrderItem {
   productId: string;
@@ -75,11 +77,106 @@ const getMockOrders = (): Order[] => {
 const StoreOrders: React.FC = () => {
   const { user } = useAuth();
   const { store } = useStore(user?.id || "");
-  const [orders] = useState<Order[]>(getMockOrders());
+  const [orders, setOrders] = useState<Order[]>(getMockOrders());
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [filterStatus, setFilterStatus] = useState<Order["status"] | "ALL">(
     "ALL"
   );
+
+  // WebSocket setup
+  const handleWebSocketMessage = (message: { type: string; payload: any }) => {
+    switch (message.type) {
+      case "NEW_ORDER":
+        const newOrder = message.payload as Order;
+        setOrders((prevOrders) => [newOrder, ...prevOrders]);
+        toast({
+          title: "New Order Received",
+          description: `Order #${newOrder.orderNumber} has been placed.`,
+          variant: "default",
+        });
+        break;
+
+      case "ORDER_STATUS_UPDATED":
+        const updatedOrder = message.payload as Order;
+        setOrders((prevOrders) =>
+          prevOrders.map((order) =>
+            order._id === updatedOrder._id ? updatedOrder : order
+          )
+        );
+        if (selectedOrder?._id === updatedOrder._id) {
+          setSelectedOrder(updatedOrder);
+        }
+        toast({
+          title: "Order Status Updated",
+          description: `Order #${updatedOrder.orderNumber} is now ${updatedOrder.status}`,
+          variant: "default",
+        });
+        break;
+
+      case "ORDER_PAYMENT_UPDATED":
+        const orderWithUpdatedPayment = message.payload as Order;
+        setOrders((prevOrders) =>
+          prevOrders.map((order) =>
+            order._id === orderWithUpdatedPayment._id
+              ? orderWithUpdatedPayment
+              : order
+          )
+        );
+        if (selectedOrder?._id === orderWithUpdatedPayment._id) {
+          setSelectedOrder(orderWithUpdatedPayment);
+        }
+        toast({
+          title: "Payment Status Updated",
+          description: `Payment for order #${orderWithUpdatedPayment.orderNumber} is ${orderWithUpdatedPayment.paymentStatus}`,
+          variant:
+            orderWithUpdatedPayment.paymentStatus === "PAID"
+              ? "default"
+              : "destructive",
+        });
+        break;
+    }
+  };
+
+  const { sendMessage } = useWebSocket(
+    `ws://localhost:3000/ws/store/${store?._id}`,
+    handleWebSocketMessage
+  );
+
+  // Function to update order status
+  const handleStatusUpdate = async (
+    orderId: string,
+    newStatus: Order["status"]
+  ) => {
+    try {
+      // Send status update through WebSocket
+      sendMessage({
+        type: "UPDATE_ORDER_STATUS",
+        payload: {
+          orderId,
+          status: newStatus,
+        },
+      });
+
+      // Optimistically update the UI
+      setOrders((prevOrders) =>
+        prevOrders.map((order) =>
+          order._id === orderId ? { ...order, status: newStatus } : order
+        )
+      );
+      if (selectedOrder?._id === orderId) {
+        setSelectedOrder((prev) =>
+          prev ? { ...prev, status: newStatus } : null
+        );
+      }
+    } catch (error) {
+      console.error("Failed to update order status:", error);
+      toast({
+        title: "Error",
+        description: "Failed to update order status",
+        variant: "destructive",
+      });
+    }
+  };
 
   const filteredOrders = orders.filter(
     (order) => filterStatus === "ALL" || order.status === filterStatus
@@ -312,10 +409,12 @@ const StoreOrders: React.FC = () => {
                   <h3 className="font-medium mb-2">Update Order Status</h3>
                   <select
                     value={selectedOrder.status}
-                    onChange={(e) => {
-                      // TODO: Implement status update
-                      console.log("Update status:", e.target.value);
-                    }}
+                    onChange={(e) =>
+                      handleStatusUpdate(
+                        selectedOrder._id,
+                        e.target.value as Order["status"]
+                      )
+                    }
                     className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                   >
                     <option value="PENDING">Pending</option>
