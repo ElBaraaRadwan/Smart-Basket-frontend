@@ -6,124 +6,166 @@ import React, {
   ReactNode,
 } from "react";
 import { useNavigate } from "react-router-dom";
-import { gql, useApolloClient, useMutation } from "@apollo/client";
+import {
+  gql,
+  useApolloClient,
+  useMutation,
+  ApolloClient,
+  NormalizedCacheObject,
+} from "@apollo/client";
+import { createApolloClient } from "../lib/apollo-client";
+import { LOGIN, REGISTER, LOGOUT } from "../graphql/mutations";
 
 interface User {
   id: string;
   email: string;
-  name: string;
-  role: "USER" | "ADMIN";
+  firstName?: string;
+  lastName?: string;
+  role: string;
 }
 
 interface AuthContextType {
-  user: User | null;
   isAuthenticated: boolean;
+  user: User | null;
+  loading: boolean;
+  error: Error | null;
+  apolloClient: ApolloClient<NormalizedCacheObject>;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, name: string) => Promise<void>;
-  logout: () => void;
+  register: (userData: RegisterInput) => Promise<void>;
+  logout: () => Promise<void>;
 }
 
-const LOGIN_MUTATION = gql`
-  mutation Login($email: String!, $password: String!) {
-    login(email: $email, password: $password) {
-      token
-      user {
-        id
-        email
-        name
-        role
-      }
-    }
-  }
-`;
+interface RegisterInput {
+  email: string;
+  password: string;
+  firstName?: string;
+  lastName?: string;
+}
 
-const REGISTER_MUTATION = gql`
-  mutation Register($email: String!, $password: String!, $name: String!) {
-    register(email: $email, password: $password, name: $name) {
-      token
-      user {
-        id
-        email
-        name
-        role
-      }
-    }
-  }
-`;
+interface Error {
+  message: string;
+}
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+export const AuthProvider: React.FC<{ children: ReactNode }> = ({
+  children,
+}) => {
   const [user, setUser] = useState<User | null>(null);
-  const navigate = useNavigate();
-  const client = useApolloClient();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  const [token, setToken] = useState<string | null>(
+    localStorage.getItem("token")
+  );
 
-  const [loginMutation] = useMutation(LOGIN_MUTATION);
-  const [registerMutation] = useMutation(REGISTER_MUTATION);
+  const apolloClient = createApolloClient(() => token);
+
+  const [loginMutation] = useMutation(LOGIN, { client: apolloClient });
+  const [registerMutation] = useMutation(REGISTER, { client: apolloClient });
+  const [logoutMutation] = useMutation(LOGOUT, { client: apolloClient });
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    const savedUser = localStorage.getItem("user");
-    if (token && savedUser) {
-      setUser(JSON.parse(savedUser));
-    }
-  }, []);
+    const validateToken = async () => {
+      if (token) {
+        try {
+          const decoded = JSON.parse(atob(token.split(".")[1]));
+          setUser({
+            id: decoded.sub,
+            email: decoded.email,
+            role: decoded.role || "user",
+          });
+        } catch (err) {
+          localStorage.removeItem("token");
+          setToken(null);
+          setUser(null);
+        } finally {
+          setLoading(false);
+        }
+      } else {
+        setLoading(false);
+      }
+    };
+
+    validateToken();
+  }, [token]);
 
   const login = async (email: string, password: string) => {
+    setLoading(true);
+    setError(null);
+
     try {
-      const { data } = await loginMutation({
-        variables: { email, password },
+      const response = await loginMutation({
+        variables: { input: { email, password } },
       });
-      localStorage.setItem("token", data.login.token);
-      localStorage.setItem("user", JSON.stringify(data.login.user));
-      setUser(data.login.user);
-      navigate("/");
-    } catch (error) {
-      throw new Error(`Login failed with error: ${error}`);
+      const { token: newToken, user: userData } = response.data.login;
+
+      localStorage.setItem("token", newToken);
+      setToken(newToken);
+      setUser(userData);
+    } catch (err: any) {
+      setError({ message: err.message || "Login failed" });
+      throw err;
+    } finally {
+      setLoading(false);
     }
   };
 
-  const register = async (email: string, password: string, name: string) => {
+  const register = async (userData: RegisterInput) => {
+    setLoading(true);
+    setError(null);
+
     try {
-      const { data } = await registerMutation({
-        variables: { email, password, name },
+      const response = await registerMutation({
+        variables: { input: userData },
       });
-      localStorage.setItem("token", data.register.token);
-      localStorage.setItem("user", JSON.stringify(data.register.user));
-      setUser(data.register.user);
-      navigate("/");
-    } catch (error) {
-      throw new Error(`Registration failed with error: ${error}`);
+      const { token: newToken, user: newUser } = response.data.register;
+
+      localStorage.setItem("token", newToken);
+      setToken(newToken);
+      setUser(newUser);
+    } catch (err: any) {
+      setError({ message: err.message || "Registration failed" });
+      throw err;
+    } finally {
+      setLoading(false);
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-    setUser(null);
-    client.resetStore();
-    navigate("/login");
+  const logout = async () => {
+    setLoading(true);
+
+    try {
+      await logoutMutation();
+      localStorage.removeItem("token");
+      setToken(null);
+      setUser(null);
+    } catch (err: any) {
+      setError({ message: err.message || "Logout failed" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const contextValue: AuthContextType = {
+    isAuthenticated: !!user,
+    user,
+    loading,
+    error,
+    apolloClient,
+    login,
+    register,
+    logout,
   };
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        isAuthenticated: !!user,
-        login,
-        register,
-        logout,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+    <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>
   );
-}
+};
 
-export function useAuth() {
+export const useAuth = () => {
   const context = useContext(AuthContext);
   if (context === undefined) {
     throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;
-}
+};
